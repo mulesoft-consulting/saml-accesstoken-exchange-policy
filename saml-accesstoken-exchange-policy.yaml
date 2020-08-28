@@ -14,7 +14,6 @@ configuration:
     description: |
       Ping Access Token URL 
     type: string
-    defaultValue: https://idpa1-test.westfieldgrp.com/as/token.oauth2
     optional: false
     sensitive: false
     allowMultiple: false
@@ -39,7 +38,6 @@ configuration:
     description: |
      vsid to access ping access token service
     type: string
-    defaultValue: urn:sts:mulesoft:unt:to:saml:nonprod
     optional: false
     sensitive: false
     allowMultiple: false   
@@ -48,7 +46,6 @@ configuration:
     description: |
      scope to access ping access token service
     type: string
-    defaultValue: edit
     optional: true
     sensitive: false
     allowMultiple: false  
