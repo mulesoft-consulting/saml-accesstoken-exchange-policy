@@ -1,0 +1,64 @@
+id: saml-accesstoken-exchange
+name: SAML Accesstoken Exchange
+description: this policy validates SAML assertion and issues access token from ping
+category: Custom
+type: custom
+resourceLevelSupported: true
+encryptionSupported: false
+standalone: true
+requiredCharacteristics: []
+providedCharacteristics: []
+configuration:  
+  - propertyName: accessTokenURL
+    name: Token endpoint 
+    description: |
+      Ping Access Token URL 
+    type: string
+    defaultValue: https://idpa1-test.westfieldgrp.com/as/token.oauth2
+    optional: false
+    sensitive: false
+    allowMultiple: false
+  - propertyName: clientId
+    name: Client ID
+    description: |
+      client_id to access ping access token service
+    type: string
+    optional: false
+    sensitive: false
+    allowMultiple: false
+  - propertyName: clientSecret
+    name: Client Secret
+    description: |
+      client_secret to access ping access token service
+    type: string
+    optional: false
+    sensitive: true
+    allowMultiple: false
+  - propertyName: vsid 
+    name: VSID
+    description: |
+     vsid to access ping access token service
+    type: string
+    defaultValue: urn:sts:mulesoft:unt:to:saml:nonprod
+    optional: false
+    sensitive: false
+    allowMultiple: false   
+  - propertyName: scope 
+    name: Scope
+    description: |
+     scope to access ping access token service
+    type: string
+    defaultValue: edit
+    optional: true
+    sensitive: false
+    allowMultiple: false  
+  - propertyName: removeSAMLAssertion 
+    name: Remove SAML Assertion
+    description: |
+     enable this field to remove the SAML Assertion after validation is successful. default is false.  
+    type: boolean
+    defaultValue: false
+    optional: true
+    sensitive: false
+    allowMultiple: false
+

@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:validation="http://www.mulesoft.org/schema/mule/validation"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xmlns:http-policy="http://www.mulesoft.org/schema/mule/http-policy"
+      xmlns:http-transform="http://www.mulesoft.org/schema/mule/http-policy-transform"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:authentication="http://www.mulesoft.org/schema/mule/authentication"
+      xsi:schemaLocation="
+http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd 
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+               http://www.mulesoft.org/schema/mule/http-policy http://www.mulesoft.org/schema/mule/http-policy/current/mule-http-policy.xsd
+               http://www.mulesoft.org/schema/mule/http-policy-transform http://www.mulesoft.org/schema/mule/http-policy-transform/current/mule-http-policy-transform.xsd
+               http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+               http://www.mulesoft.org/schema/mule/authentication http://www.mulesoft.org/schema/mule/authentication/current/mule-authentication.xsd
+               http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd">
+
+
+    <http-policy:proxy name="{{{policyId}}}-custom-policy">
+        <http-policy:source propagateMessageTransformations="true">
+			<try>
+				<logger message="Beginning of SAML token validation custom policy "/>
+				<!--  extract saml assertion and base64 encode -->
+				<ee:transform>
+					<ee:variables>						
+						<ee:set-variable variableName="assertion"><![CDATA[%dw 2.0
+							output text/plain
+							
+							import dw::Crypto
+							import toBase64 from dw::core::Binaries
+							
+							ns ns0 http://schemas.xmlsoap.org/soap/envelope/
+							ns ns1 http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd
+							ns ns2 http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd
+							ns saml urn:oasis:names:tc:SAML:2.0:assertion
+							
+							var assertion= {
+							saml#Assertion @((payload.ns0#Envelope.ns0#Header.ns1#Security.saml#Assertion.@)): payload.ns0#Envelope.ns0#Header.ns1#Security.saml#Assertion
+							}
+							
+							---
+							
+							if (assertion.saml#Assertion !=null) toBase64(write(assertion,"application/xml", {"writeDeclaration":false,"indent":false}) as Binary) else ""
+							]]>
+						</ee:set-variable>
+					</ee:variables>				
+				</ee:transform>	
+				
+				<!--  reject the request if saml assertion is not present in request -->	
+				<validation:validate-size value="#[vars.assertion]" min="1" message='#["SAML assertion is missing or incorrect"]'/>
+				
+				<!-- prepare ping access token request body -->
+				<ee:transform>
+						<ee:variables>
+							<ee:set-variable variableName="pingRequest">
+								<![CDATA[output application/x-www-form-urlencoded
+								---
+								{
+									"client_id" : "{{{clientId}}}",
+									"client_secret": "{{{clientSecret}}}",
+									"grant_type" : "urn:ietf:params:oauth:grant-type:saml2-bearer",
+									"assertion": vars.assertion,
+									"scope" : "{{{scope}}}",
+									"vsid": "{{{vsid}}}"
+									
+								}]]>
+							</ee:set-variable>
+						</ee:variables>
+					</ee:transform>
+								
+					<!-- call ping token service -->
+					<http:request method="POST" url="{{{accessTokenURL}}}" target="pingResponse" targetValue='#[payload]'>
+						<http:body ><![CDATA[#[vars.pingRequest]]]></http:body>
+						<http:response-validator >
+							<http:success-status-code-validator values="200..599" />
+						</http:response-validator>
+					</http:request>	
+					
+					<!--  set access token if authentication is successful, fail the request otherwise -->
+					<choice>
+						<when expression='#[(sizeOf(vars.pingResponse) &gt; 0) and (vars.pingResponse."access_token" !=null)]'>						
+							<logger message="token exchange successful "/>
+							<set-variable value='#[vars.pingResponse."access_token"]' variableName="token"/>							
+							<authentication:add-properties newProperties="#[{'token': vars.token}]"/>
+							<!-- Remove SAML assertion from request -->
+							{{#if removeSAMLAssertion}}	
+							<ee:transform>
+								<ee:message>
+									<ee:set-payload>
+									<![CDATA[%dw 2.0
+										output application/xml inlineCloseOn="empty"
+										---
+										
+										payload update {
+										case a at .Envelope.Header.Security -> a - "Assertion"
+										}]]>
+									</ee:set-payload>
+								</ee:message>
+							</ee:transform>
+							<logger message="Removed SAML Assertion from request"/>
+							{{/if}}
+						</when>
+						<when expression='(sizeOf(vars.pingResponse) &gt; 0) and ((vars.pingResponse."error_description" !=null) and (vars.pingResponse."access_token" == null))'>
+							<raise-error type="CLIENT_SECURITY" description='#[vars.pingResponse."error_description"]'/>
+						</when>
+						<otherwise>
+							<raise-error type="CLIENT_SECURITY" description='"internal error occured while authenticating the request with IDP"'/>							
+						</otherwise>
+					</choice>
+					<logger message="End of SAML token validation custom policy "/> 				
+					<http-policy:execute-next/>				 						
+					<error-handler>
+						<on-error-continue enableNotifications="true" logException="true" type="MULE:CLIENT_SECURITY, VALIDATION:INVALID_SIZE">
+							<ee:transform>
+								<ee:message >
+									<ee:set-payload ><![CDATA[%dw 2.0
+										output application/xml
+										
+										ns soap http://schemas.xmlsoap.org/soap/envelope/
+										ns wsse http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd
+										
+										---
+										{
+											soap#Envelope:{
+												soap#Body:{
+													soap#Fault:{
+														faultcode @('xmlns:wsse':'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd'): "wsse:InvalidSecurityToken",
+														faultstring: error.description
+														}
+												}
+											}
+										}]]>
+									</ee:set-payload>
+								</ee:message>
+							</ee:transform>
+						</on-error-continue>
+						<on-error-continue enableNotifications="true" logException="true" when='#[error.errorType.namespace == "HTTP"]'>
+							<ee:transform>
+								<ee:message >
+									<ee:set-payload ><![CDATA[%dw 2.0
+										output application/xml
+										
+										ns soap http://schemas.xmlsoap.org/soap/envelope/
+										
+										---
+										{
+											soap#Envelope:{
+												soap#Body:{
+													soap#Fault:{
+														faultcode: "soap:Server",
+														faultstring: "Internal error occured while authenticating the request, please contact system administrator"
+														}
+												}
+											}
+										}]]>
+									</ee:set-payload>
+								</ee:message>
+							</ee:transform>
+						</on-error-continue>								
+					</error-handler>
+				</try>
+        </http-policy:source>
+    </http-policy:proxy>
+</mule>
